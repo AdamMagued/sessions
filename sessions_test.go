@@ -7,6 +7,7 @@ package sessions
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,6 +212,56 @@ func TestCookieStoreMapPanic(t *testing.T) {
 	err = session.Save(req, w)
 	if err != nil {
 		t.Fatal("failed to save session", err)
+	}
+}
+
+type errorStore struct{}
+
+func (errorStore) Get(r *http.Request, name string) (*Session, error) {
+	return GetRegistry(r).Get(errorStore{}, name)
+}
+
+func (errorStore) New(r *http.Request, name string) (*Session, error) {
+	return nil, errors.New("store error")
+}
+
+func (errorStore) Save(r *http.Request, w http.ResponseWriter, s *Session) error {
+	return nil
+}
+
+func TestRegistryGetStoreNewError(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Registry.Get panicked: %v", r)
+		}
+	}()
+
+	req, err := http.NewRequest("GET", "http://www.example.com", nil)
+	if err != nil {
+		t.Fatal("failed to create request", err)
+	}
+
+	session, err := GetRegistry(req).Get(errorStore{}, "test-session")
+	if session != nil {
+		t.Fatalf("expected nil session, got %#v", session)
+	}
+	if err == nil || err.Error() != "store error" {
+		t.Fatalf("expected 'store error', got %v", err)
+	}
+
+	// Verify Save on registry does not panic when a session failed to initialize.
+	w := httptest.NewRecorder()
+	if err := Save(req, w); err != nil {
+		t.Fatalf("unexpected error saving registry: %v", err)
+	}
+
+	// Verify calling Get again returns the error rather than panicking.
+	session2, err2 := GetRegistry(req).Get(errorStore{}, "test-session")
+	if session2 != nil {
+		t.Fatalf("expected nil session on second call, got %#v", session2)
+	}
+	if err2 == nil || err2.Error() != "store error" {
+		t.Fatalf("expected 'store error' on second call, got %v", err2)
 	}
 }
 
